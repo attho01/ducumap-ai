@@ -29,6 +29,12 @@ export default function LandingPage({ onStart }: LandingPageProps) {
         return;
       }
       
+      // Check for non-ASCII characters (e.g. Korean letters accidental copy-paste)
+      if (/[^\x20-\x7E]/.test(trimmedKey)) {
+        alert('API Key에 한글이나 잘못된 특수문자가 섞여 있습니다.\n복사 과정에서 다른 글자가 들어가지 않았는지 확인해주세요.');
+        return;
+      }
+      
       setIsValidating(true);
       const isValid = await validateApiKey(trimmedKey);
       setIsValidating(false);
