@@ -434,7 +434,7 @@ ${mappingDataText}
       });
 
       const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: contents,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
@@ -597,7 +597,7 @@ ${userText}
       contents[contents.length - 1].parts.push({ text: promptText });
 
       const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-1.5-flash',
+        model: 'gemini-2.5-flash',
         contents: contents,
         config: {
           systemInstruction: SYSTEM_INSTRUCTION,
