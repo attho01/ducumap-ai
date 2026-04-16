@@ -92,9 +92,9 @@ export default function ChatInterface({ onBack, apiKey }: ChatInterfaceProps) {
   const ai = new GoogleGenAI({ apiKey: apiKey || process.env.GEMINI_API_KEY });
 
   const generateStreamWithFallback = async (contents: any[]) => {
-    // 503 과부하 증상이 잦은 gemini-2.5-flash를 위해 최대 5번까지 자동 재시도하는(Retry) 로직
+    // 사용자가 요청한 gemini-3-flash-preview 적용 및 자동 재시도 로직 유지
     const MAX_RETRIES = 5;
-    const model = 'gemini-2.5-flash';
+    const model = 'gemini-3-flash-preview';
     let lastError = null;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
