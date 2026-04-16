@@ -91,6 +91,34 @@ export default function ChatInterface({ onBack, apiKey }: ChatInterfaceProps) {
   // Initialize Gemini API
   const ai = new GoogleGenAI({ apiKey: apiKey || process.env.GEMINI_API_KEY });
 
+  const generateStreamWithFallback = async (contents: any[]) => {
+    const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'];
+    let lastError = null;
+
+    for (const model of modelsToTry) {
+      try {
+        console.log(`Trying model: ${model}`);
+        return await ai.models.generateContentStream({
+          model: model,
+          contents: contents,
+          config: {
+            systemInstruction: SYSTEM_INSTRUCTION,
+          }
+        });
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`Failed with ${model}:`, err?.message || err);
+        const errMsg = (err?.message || '').toUpperCase();
+        if (errMsg.includes('503') || errMsg.includes('429') || errMsg.includes('404') || 
+            errMsg.includes('UNAVAILABLE') || errMsg.includes('EXHAUSTED') || errMsg.includes('NOT FOUND')) {
+          continue; // try next model
+        }
+        throw err; // throw immediately for other types of errors (e.g., bad request, invalid API key)
+      }
+    }
+    throw lastError;
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -433,13 +461,7 @@ ${mappingDataText}
         parts: parts,
       });
 
-      const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
-        contents: contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-        }
-      });
+      const responseStream = await generateStreamWithFallback(contents);
 
       setMessages(prev => [...prev, {
         role: 'model',
@@ -596,13 +618,7 @@ ${userText}
       // Add the prompt text to the last user message
       contents[contents.length - 1].parts.push({ text: promptText });
 
-      const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
-        contents: contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-        }
-      });
+      const responseStream = await generateStreamWithFallback(contents);
 
       setMessages(prev => [...prev, {
         role: 'model',
