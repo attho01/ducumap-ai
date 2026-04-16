@@ -92,12 +92,14 @@ export default function ChatInterface({ onBack, apiKey }: ChatInterfaceProps) {
   const ai = new GoogleGenAI({ apiKey: apiKey || process.env.GEMINI_API_KEY });
 
   const generateStreamWithFallback = async (contents: any[]) => {
-    const modelsToTry = ['gemini-1.5-flash', 'gemini-2.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp'];
+    // 503 과부하 증상이 잦은 gemini-2.5-flash를 위해 최대 5번까지 자동 재시도하는(Retry) 로직
+    const MAX_RETRIES = 5;
+    const model = 'gemini-2.5-flash';
     let lastError = null;
 
-    for (const model of modelsToTry) {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
       try {
-        console.log(`Trying model: ${model}`);
+        console.log(`[Attempt ${attempt}/${MAX_RETRIES}] Trying model: ${model}`);
         return await ai.models.generateContentStream({
           model: model,
           contents: contents,
@@ -107,16 +109,22 @@ export default function ChatInterface({ onBack, apiKey }: ChatInterfaceProps) {
         });
       } catch (err: any) {
         lastError = err;
-        console.warn(`Failed with ${model}:`, err?.message || err);
+        console.warn(`[Attempt ${attempt}] Failed with ${model}:`, err?.message || err);
         const errMsg = (err?.message || '').toUpperCase();
-        if (errMsg.includes('503') || errMsg.includes('429') || errMsg.includes('404') || 
-            errMsg.includes('UNAVAILABLE') || errMsg.includes('EXHAUSTED') || errMsg.includes('NOT FOUND')) {
-          continue; // try next model
+        
+        // 서버 과부하(503)나 할당량(429) 에러인 경우에만 대기 후 재시도
+        if (errMsg.includes('503') || errMsg.includes('429') || errMsg.includes('UNAVAILABLE') || errMsg.includes('EXHAUSTED')) {
+          const waitTime = attempt * 1500; // 1.5s, 3s, 4.5s... 점진적 증가
+          console.log(`Server busy. Waiting ${waitTime}ms before next attempt...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
+          continue; 
         }
-        throw err; // throw immediately for other types of errors (e.g., bad request, invalid API key)
+        
+        // 404 등 아예 접근 불가능한 에러는 즉시 반환
+        throw err;
       }
     }
-    throw lastError;
+    throw lastError; // 최대 횟수 초과 시
   };
 
   const scrollToBottom = () => {
