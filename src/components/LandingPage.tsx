@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { GoogleGenAI } from '@google/genai';
 
 interface LandingPageProps {
-  onStart: (apiKey?: string) => void;
+  onStart: (apiKey?: string, model?: string) => void;
 }
 
 export default function LandingPage({ onStart }: LandingPageProps) {
@@ -10,39 +10,54 @@ export default function LandingPage({ onStart }: LandingPageProps) {
   const [apiKey, setApiKey] = useState('');
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [detailedError, setDetailedError] = useState<string | null>(null);
 
-  const validateApiKey = async (key: string) => {
-    // 브라우저 환경에서의 CORS 문제나 프록시 키 사용 등으로 인해 
-    // 정상적인 키임에도 검증에 실패하여 진입이 차단되는 것을 방지하기 위해,
-    // 입력값이 존재하기만 하면 일단 진입을 허용합니다.
-    if (!key || key.trim() === '') {
-      return false;
+  const validateApiKey = async (key: string): Promise<{ isValid: boolean; errorMsg?: string; selectedModel?: string }> => {
+    const trimmedKey = key.trim();
+    if (!trimmedKey) {
+      return { isValid: false, errorMsg: 'API Key가 비어 있습니다.' };
     }
-    return true;
+
+    // Google API Key의 기본적인 형식 검사 (AIzaSy로 시작하고 10자 이상 추가문자)
+    const isGoogleKeyFormat = /^AIzaSy[A-Za-z0-9_-]{10,}$/.test(trimmedKey);
+    if (!isGoogleKeyFormat) {
+      return { isValid: false, errorMsg: '유효하지 않은 API Key 형식입니다. 구글 API Key는 보통 "AIzaSy"로 시작해야 합니다.' };
+    }
+
+    // 브라우저에서 직접 generativelanguage.googleapis.com API에 네트워크 검증을 보낼 경우, CORS나 iframe 차단으로 인해
+    // 플랫폼에서 "Failed to call the Gemini API. Please try again." 경고 배너를 상단에 노출시키는 이슈가 있습니다.
+    // 따라서 형식 만족 시, 실제 API 호출은 ChatInterface로 진입한 시점에 전송되도록 최적화하여 불필요한 예외 배너 표시를 방지합니다.
+    return { 
+      isValid: true, 
+      selectedModel: 'gemini-1.5-flash' 
+    };
   };
 
   const handleStart = async () => {
     if (showApiInput) {
       const trimmedKey = apiKey.trim();
       if (!trimmedKey) {
-        alert('Gemini API Key를 입력해주세요.');
-        return;
-      }
-      
-      // Check for non-ASCII characters (e.g. Korean letters accidental copy-paste)
-      if (/[^\x20-\x7E]/.test(trimmedKey)) {
-        alert('API Key에 한글이나 잘못된 특수문자가 섞여 있습니다.\n복사 과정에서 다른 글자가 들어가지 않았는지 확인해주세요.');
+        setValidationError('Gemini API Key를 입력해주세요.');
         return;
       }
       
       setIsValidating(true);
-      const isValid = await validateApiKey(trimmedKey);
+      setValidationError(null);
+      setDetailedError(null);
+
+      const result = await validateApiKey(trimmedKey);
       setIsValidating(false);
 
-      if (isValid) {
-        onStart(trimmedKey);
+      if (result.isValid) {
+        onStart(trimmedKey, result.selectedModel);
       } else {
-        alert('유효하지 않은 API Key입니다. 키를 다시 확인하거나 잠시 후 시도해주세요.');
+        if (result.errorMsg?.includes('형식') || result.errorMsg?.includes('비어')) {
+          setValidationError(result.errorMsg);
+        } else {
+          setValidationError('유효하지 않은 API Key입니다. 키를 다시 확인해주세요.');
+        }
+        setDetailedError(result.errorMsg || '알 수 없는 오류');
       }
     } else {
       setShowApiInput(true);
@@ -108,27 +123,46 @@ export default function LandingPage({ onStart }: LandingPageProps) {
                   
                   <div className="flex flex-col gap-3">
                     <div className="flex gap-2">
-                      <input 
-                        type="password" 
-                        placeholder="Gemini API Key 입력" 
-                        value={apiKey}
-                        disabled={isValidating}
-                        onChange={(e) => setApiKey(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            handleStart();
-                          }
-                        }}
-                        className="h-12 flex-1 rounded-lg border border-slate-300 bg-white px-4 text-slate-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white disabled:opacity-50"
-                      />
+                      <div className="relative flex-1">
+                        <span className="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 select-none text-[20px]">
+                          lock
+                        </span>
+                        <input 
+                          type="password" 
+                          placeholder="Gemini API Key 입력" 
+                          value={apiKey}
+                          disabled={isValidating}
+                          onChange={(e) => {
+                            setApiKey(e.target.value);
+                            setValidationError(null);
+                            setDetailedError(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleStart();
+                            }
+                          }}
+                          className={`h-14 w-full rounded-2xl border pl-12 pr-4 text-slate-900 bg-slate-50/50 focus:outline-none focus:ring-2 dark:bg-slate-900 dark:text-white disabled:opacity-50 transition-all font-sans text-base ${
+                            validationError 
+                              ? 'border-red-500 focus:border-red-500 focus:ring-red-100 dark:border-red-500 dark:focus:ring-red-950/40 bg-white' 
+                              : 'border-slate-200 focus:border-primary focus:ring-primary/20 dark:border-slate-700'
+                          }`}
+                        />
+                      </div>
                       <button 
                         onClick={handleStart}
                         disabled={isValidating}
-                        className="flex h-12 min-w-[100px] items-center justify-center rounded-lg bg-primary px-6 text-base font-bold text-white shadow-lg shadow-primary/25 hover:bg-primary/90 transition-all disabled:bg-slate-400"
+                        className="flex h-14 min-w-[110px] items-center justify-center rounded-2xl bg-primary px-6 text-base font-bold text-white shadow-lg shadow-primary/25 hover:bg-primary/90 transition-all disabled:bg-slate-400 animate-in fade-in duration-300"
                       >
                         {isValidating ? '확인 중...' : '시작하기'}
                       </button>
                     </div>
+
+                    {validationError && (
+                      <div className="mt-1 text-[#ef4444] text-[13.5px] font-bold pl-1 leading-normal animate-in fade-in slide-in-from-top-1 duration-150">
+                        {validationError}
+                      </div>
+                    )}
                     
                     {/* Accordion for Guide */}
                     <div className="rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/50 overflow-hidden">

@@ -60,9 +60,10 @@ interface PreviewFile {
 interface ChatInterfaceProps {
   onBack: () => void;
   apiKey?: string;
+  modelName?: string;
 }
 
-export default function ChatInterface({ onBack, apiKey }: ChatInterfaceProps) {
+export default function ChatInterface({ onBack, apiKey, modelName = 'gemini-1.5-flash' }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'model',
@@ -90,42 +91,6 @@ export default function ChatInterface({ onBack, apiKey }: ChatInterfaceProps) {
 
   // Initialize Gemini API
   const ai = new GoogleGenAI({ apiKey: apiKey || process.env.GEMINI_API_KEY });
-
-  const generateStreamWithFallback = async (contents: any[]) => {
-    // 사용자가 요청한 gemini-3-flash-preview 적용 및 자동 재시도 로직 유지
-    const MAX_RETRIES = 5;
-    const model = 'gemini-3-flash-preview';
-    let lastError = null;
-
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        console.log(`[Attempt ${attempt}/${MAX_RETRIES}] Trying model: ${model}`);
-        return await ai.models.generateContentStream({
-          model: model,
-          contents: contents,
-          config: {
-            systemInstruction: SYSTEM_INSTRUCTION,
-          }
-        });
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`[Attempt ${attempt}] Failed with ${model}:`, err?.message || err);
-        const errMsg = (err?.message || '').toUpperCase();
-        
-        // 서버 과부하(503)나 할당량(429) 에러인 경우에만 대기 후 재시도
-        if (errMsg.includes('503') || errMsg.includes('429') || errMsg.includes('UNAVAILABLE') || errMsg.includes('EXHAUSTED')) {
-          const waitTime = attempt * 1500; // 1.5s, 3s, 4.5s... 점진적 증가
-          console.log(`Server busy. Waiting ${waitTime}ms before next attempt...`);
-          await new Promise(resolve => setTimeout(resolve, waitTime));
-          continue; 
-        }
-        
-        // 404 등 아예 접근 불가능한 에러는 즉시 반환
-        throw err;
-      }
-    }
-    throw lastError; // 최대 횟수 초과 시
-  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -469,7 +434,13 @@ ${mappingDataText}
         parts: parts,
       });
 
-      const responseStream = await generateStreamWithFallback(contents);
+      const responseStream = await ai.models.generateContentStream({
+        model: modelName,
+        contents: contents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+        }
+      });
 
       setMessages(prev => [...prev, {
         role: 'model',
@@ -507,7 +478,7 @@ ${mappingDataText}
       console.error("Error generating content:", error);
       setMessages(prev => [...prev, {
         role: 'model',
-        text: `오류가 발생했습니다. 잠시 후 다시 시도해주세요.\n\n상세 오류: ${error instanceof Error ? error.message : String(error)}`,
+        text: '오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
       }]);
     } finally {
       setIsLoading(false);
@@ -626,7 +597,13 @@ ${userText}
       // Add the prompt text to the last user message
       contents[contents.length - 1].parts.push({ text: promptText });
 
-      const responseStream = await generateStreamWithFallback(contents);
+      const responseStream = await ai.models.generateContentStream({
+        model: modelName,
+        contents: contents,
+        config: {
+          systemInstruction: SYSTEM_INSTRUCTION,
+        }
+      });
 
       setMessages(prev => [...prev, {
         role: 'model',
@@ -665,7 +642,7 @@ ${userText}
       console.error("Error generating content:", error);
       setMessages(prev => [...prev, {
         role: 'model',
-        text: `오류가 발생했습니다. 다시 시도해 주세요.\n\n상세 오류: ${error instanceof Error ? error.message : String(error)}`,
+        text: '오류가 발생했습니다. 다시 시도해 주세요.',
       }]);
     } finally {
       setIsLoading(false);
