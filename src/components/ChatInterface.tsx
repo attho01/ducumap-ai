@@ -63,7 +63,15 @@ interface ChatInterfaceProps {
   modelName?: string;
 }
 
-export default function ChatInterface({ onBack, apiKey, modelName = 'gemini-2.5-flash' }: ChatInterfaceProps) {
+// 지원 가능한 Gemini Flash 모델 우선순위 체인 (신규/기존 계정 호환성 보장)
+const CANDIDATE_MODELS = [
+  'gemini-3.5-flash',
+  'gemini-3.8-flash',
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+];
+
+export default function ChatInterface({ onBack, apiKey, modelName = 'gemini-3.5-flash' }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'model',
@@ -89,15 +97,74 @@ export default function ChatInterface({ onBack, apiKey, modelName = 'gemini-2.5-
   const dataInputRef = useRef<HTMLInputElement>(null);
   const docxContainerRef = useRef<HTMLDivElement>(null);
 
-  // Initialize Gemini API
+  // Initialize Gemini API (브라우저 비표준 User-Agent 헤더 제거)
   const ai = new GoogleGenAI({ 
     apiKey: apiKey || process.env.GEMINI_API_KEY,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
+  });
+
+  // 사용자 친화적 에러 메시지 추출 함수
+  const getErrorMessage = (error: any): string => {
+    const errStr = (error?.message || error?.toString() || '').toLowerCase();
+    
+    if (errStr.includes('api_key_invalid') || errStr.includes('api key not valid')) {
+      return '입력하신 Gemini API 키가 유효하지 않습니다. Google AI Studio(aistudio.google.com)에서 발급받은 키를 다시 확인해 주세요.';
+    }
+    if (errStr.includes('resource_exhausted') || error?.status === 429) {
+      return 'API 사용량 한도(Quota)를 초과했습니다. 잠시 후 다시 시도해 주시거나 새 키를 사용해 주세요.';
+    }
+    if (errStr.includes('permission_denied') || error?.status === 403) {
+      return 'API 호출 권한이 없습니다. 해당 Google Cloud 프로젝트에서 Generative Language API가 활성화되어 있는지 확인해 주세요.';
+    }
+    if (errStr.includes('failed to fetch') || errStr.includes('network') || errStr.includes('cors')) {
+      return '네트워크 연결 오류가 발생했습니다. 인터넷 연결 상태나 브라우저 확장 프로그램 차단 여부를 확인해 주세요.';
+    }
+    if (errStr.includes('not_found') || error?.status === 404) {
+      return '해당 계정에서 지원하는 AI 모델을 찾을 수 없습니다. Google AI Studio에서 계정 상태를 확인해 주세요.';
+    }
+
+    return `오류가 발생했습니다: ${error?.message || '잠시 후 다시 시도해주세요.'}`;
+  };
+
+  // 계정별 모델 지원 여부에 맞춰 다중 모델 자동 폴백(Fallback) 스트리밍 실행 함수
+  const executeGenerateStreamWithFallback = async (
+    contents: any[],
+    systemInstruction = SYSTEM_INSTRUCTION
+  ) => {
+    const modelsToTry = [
+      modelName,
+      ...CANDIDATE_MODELS.filter(m => m !== modelName)
+    ];
+
+    let lastError: any = null;
+
+    for (const currentModel of modelsToTry) {
+      try {
+        console.log(`[DocuMap AI] Trying model: ${currentModel}`);
+        const stream = await ai.models.generateContentStream({
+          model: currentModel,
+          contents: contents,
+          config: {
+            systemInstruction,
+          }
+        });
+        return { stream, usedModel: currentModel };
+      } catch (err: any) {
+        lastError = err;
+        console.warn(`[DocuMap AI] Model ${currentModel} failed:`, err);
+        
+        // 유효하지 않은 API 키인 경우 모든 모델이 실패하므로 즉시 중단
+        const errMsg = (err?.message || '').toLowerCase();
+        if (errMsg.includes('api_key_invalid') || errMsg.includes('api key not valid')) {
+          throw err;
+        }
+
+        // 404(모델 없음), 400(미지원 모델), 403, 503 등 모델 단위 오류는 다음 후보 모델로 자동 재시도
+        continue;
       }
     }
-  });
+
+    throw lastError;
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -399,7 +466,10 @@ ${mappingDataText}
       const parts: any[] = [];
 
       // Process Template
-      if (processedTemplate.name.endsWith('.docx')) {
+      const isTemplateDocx = processedTemplate.name.endsWith('.docx') || processedTemplate.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      const isTemplateText = processedTemplate.name.endsWith('.txt') || processedTemplate.name.endsWith('.csv') || processedTemplate.type === 'text/plain' || processedTemplate.type === 'text/csv';
+
+      if (isTemplateDocx) {
         try {
           const binString = atob(processedTemplate.data);
           const bytes = new Uint8Array(binString.length);
@@ -409,15 +479,39 @@ ${mappingDataText}
           const result = await mammoth.convertToHtml({ arrayBuffer: bytes.buffer });
           parts.push({ text: `[서식 파일: ${processedTemplate.name}]\n${result.value}` });
         } catch (e) {
-          parts.push({ inlineData: { mimeType: processedTemplate.type, data: processedTemplate.data } });
+          parts.push({ inlineData: { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', data: processedTemplate.data } });
+        }
+      } else if (isTemplateText) {
+        try {
+          const binString = atob(processedTemplate.data);
+          const bytes = new Uint8Array(binString.length);
+          for (let i = 0; i < binString.length; i++) {
+            bytes[i] = binString.charCodeAt(i);
+          }
+          const textContent = new TextDecoder('utf-8').decode(bytes);
+          parts.push({ text: `[서식 파일: ${processedTemplate.name}]\n${textContent}` });
+        } catch (e) {
+          parts.push({ inlineData: { mimeType: 'text/plain', data: processedTemplate.data } });
         }
       } else {
-        parts.push({ inlineData: { mimeType: processedTemplate.type, data: processedTemplate.data } });
+        let mime = processedTemplate.type;
+        if (processedTemplate.name.endsWith('.pdf')) mime = 'application/pdf';
+        else if (processedTemplate.name.endsWith('.png')) mime = 'image/png';
+        else if (processedTemplate.name.endsWith('.jpg') || processedTemplate.name.endsWith('.jpeg')) mime = 'image/jpeg';
+        else if (processedTemplate.name.endsWith('.webp')) mime = 'image/webp';
+        
+        if (!mime || mime === 'application/octet-stream') {
+          mime = 'application/pdf';
+        }
+        parts.push({ inlineData: { mimeType: mime, data: processedTemplate.data } });
       }
 
       // Process Data Files
       for (const file of processedDataFiles) {
-        if (file.name.endsWith('.docx')) {
+        const isDocx = file.name.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+        const isText = file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.md') || file.name.endsWith('.json') || file.type === 'text/plain' || file.type === 'text/csv';
+
+        if (isDocx) {
           try {
             const binString = atob(file.data);
             const bytes = new Uint8Array(binString.length);
@@ -427,10 +521,42 @@ ${mappingDataText}
             const result = await mammoth.convertToHtml({ arrayBuffer: bytes.buffer });
             parts.push({ text: `[참고 자료: ${file.name}]\n${result.value}` });
           } catch (e) {
-            parts.push({ inlineData: { mimeType: file.type, data: file.data } });
+            parts.push({ inlineData: { mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', data: file.data } });
+          }
+        } else if (isText) {
+          try {
+            const binString = atob(file.data);
+            const bytes = new Uint8Array(binString.length);
+            for (let i = 0; i < binString.length; i++) {
+              bytes[i] = binString.charCodeAt(i);
+            }
+            const textContent = new TextDecoder('utf-8').decode(bytes);
+            parts.push({ text: `[참고 자료: ${file.name}]\n${textContent}` });
+          } catch (e) {
+            parts.push({ inlineData: { mimeType: 'text/plain', data: file.data } });
           }
         } else {
-          parts.push({ inlineData: { mimeType: file.type, data: file.data } });
+          let mime = file.type;
+          if (file.name.endsWith('.pdf')) mime = 'application/pdf';
+          else if (file.name.endsWith('.png')) mime = 'image/png';
+          else if (file.name.endsWith('.jpg') || file.name.endsWith('.jpeg')) mime = 'image/jpeg';
+          else if (file.name.endsWith('.webp')) mime = 'image/webp';
+
+          if (!mime || mime === 'application/octet-stream') {
+            try {
+              const binString = atob(file.data);
+              const bytes = new Uint8Array(binString.length);
+              for (let i = 0; i < binString.length; i++) {
+                bytes[i] = binString.charCodeAt(i);
+              }
+              const textContent = new TextDecoder('utf-8').decode(bytes);
+              parts.push({ text: `[참고 자료: ${file.name}]\n${textContent}` });
+            } catch {
+              parts.push({ text: `[참고 파일: ${file.name}]` });
+            }
+          } else {
+            parts.push({ inlineData: { mimeType: mime, data: file.data } });
+          }
         }
       }
 
@@ -441,13 +567,7 @@ ${mappingDataText}
         parts: parts,
       });
 
-      const responseStream = await ai.models.generateContentStream({
-        model: modelName,
-        contents: contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-        }
-      });
+      const { stream: responseStream } = await executeGenerateStreamWithFallback(contents, SYSTEM_INSTRUCTION);
 
       setMessages(prev => [...prev, {
         role: 'model',
@@ -481,11 +601,12 @@ ${mappingDataText}
            setDocumentHtml(fallbackMatch[1] || fallbackMatch[0]);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error generating content:", error);
+      const friendlyMsg = getErrorMessage(error);
       setMessages(prev => [...prev, {
         role: 'model',
-        text: '오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
+        text: friendlyMsg,
       }]);
     } finally {
       setIsLoading(false);
@@ -561,6 +682,7 @@ ${userText}
         if (msg.files) {
           for (const file of msg.files) {
             const isDocx = file.name.endsWith('.docx') || file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+            const isText = file.name.endsWith('.txt') || file.name.endsWith('.csv') || file.name.endsWith('.md') || file.name.endsWith('.json') || file.type === 'text/plain' || file.type === 'text/csv';
             
             if (isDocx) {
               try {
@@ -575,15 +697,36 @@ ${userText}
                 console.error("Failed to convert DOCX for Gemini", e);
                 parts.push({
                   inlineData: {
-                    mimeType: file.type,
+                    mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
                     data: file.data,
                   }
                 });
               }
+            } else if (isText) {
+              try {
+                const binString = atob(file.data);
+                const bytes = new Uint8Array(binString.length);
+                for (let i = 0; i < binString.length; i++) {
+                  bytes[i] = binString.charCodeAt(i);
+                }
+                const textContent = new TextDecoder('utf-8').decode(bytes);
+                parts.push({ text: `[문서 내용(${file.name})]:\n${textContent}` });
+              } catch {
+                parts.push({ inlineData: { mimeType: 'text/plain', data: file.data } });
+              }
             } else {
+              let mime = file.type;
+              if (file.name.endsWith('.pdf')) mime = 'application/pdf';
+              else if (file.name.endsWith('.png')) mime = 'image/png';
+              else if (file.name.endsWith('.jpg') || file.name.endsWith('.jpeg')) mime = 'image/jpeg';
+              else if (file.name.endsWith('.webp')) mime = 'image/webp';
+
+              if (!mime || mime === 'application/octet-stream') {
+                mime = 'application/pdf';
+              }
               parts.push({
                 inlineData: {
-                  mimeType: file.type,
+                  mimeType: mime,
                   data: file.data,
                 }
               });
@@ -604,13 +747,7 @@ ${userText}
       // Add the prompt text to the last user message
       contents[contents.length - 1].parts.push({ text: promptText });
 
-      const responseStream = await ai.models.generateContentStream({
-        model: modelName,
-        contents: contents,
-        config: {
-          systemInstruction: SYSTEM_INSTRUCTION,
-        }
-      });
+      const { stream: responseStream } = await executeGenerateStreamWithFallback(contents, SYSTEM_INSTRUCTION);
 
       setMessages(prev => [...prev, {
         role: 'model',
@@ -645,11 +782,12 @@ ${userText}
         }
       }
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error generating content:", error);
+      const friendlyMsg = getErrorMessage(error);
       setMessages(prev => [...prev, {
         role: 'model',
-        text: '오류가 발생했습니다. 다시 시도해 주세요.',
+        text: friendlyMsg,
       }]);
     } finally {
       setIsLoading(false);

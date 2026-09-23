@@ -5,7 +5,7 @@ import ChatInterface from './components/ChatInterface';
 export default function App() {
   const [started, setStarted] = useState(false);
   const [apiKey, setApiKey] = useState<string | undefined>();
-  const [selectedModel, setSelectedModel] = useState<string>('gemini-2.5-flash');
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.5-flash');
 
   const handleStart = (key?: string, model?: string) => {
     if (key) {

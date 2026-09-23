@@ -14,23 +14,22 @@ export default function LandingPage({ onStart }: LandingPageProps) {
   const [detailedError, setDetailedError] = useState<string | null>(null);
 
   const validateApiKey = async (key: string): Promise<{ isValid: boolean; errorMsg?: string; selectedModel?: string }> => {
-    // 유저가 복사 시 들어갈 수 있는 제로 너비 공백(\u200b, \ufeff 등) 및 공백 문자 제거
-    const trimmedKey = key.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+    // 유저가 복사 시 들어갈 수 있는 제로 너비 공백(\u200b, \ufeff 등), 따옴표 및 공백 문자 제거
+    let trimmedKey = key.replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+    trimmedKey = trimmedKey.replace(/^["'`]|["'`]$/g, '').trim();
+
     if (!trimmedKey) {
       return { isValid: false, errorMsg: 'API Key가 비어 있습니다.' };
     }
 
-    // 개발용 프록시, 특수 환경 키 등 우회 입력 수용 및 사용자 편의를 위해 자릿수 기준 정도로 대폭 완화
     if (trimmedKey.length < 10) {
       return { isValid: false, errorMsg: 'API Key의 형식이 잘못되었습니다. 올바른 키를 입력해주세요.' };
     }
 
-    // 브라우저에서 직접 generativelanguage.googleapis.com API에 네트워크 검증을 보낼 경우, CORS나 iframe 차단으로 인해
-    // 플랫폼에서 "Failed to call the Gemini API. Please try again." 경고 배너를 상단에 노출시키는 이슈가 있습니다.
-    // 따라서 형식 만족 시, 실제 API 호출은 ChatInterface로 진입한 시점에 전송되도록 최적화하여 불필요한 예외 배너 표시를 방지합니다.
+    // 신규/기존 모든 구글 계정에서 가장 안정적으로 지원되는 GA 모델인 gemini-3.5-flash를 기본 모델로 지정
     return { 
       isValid: true, 
-      selectedModel: 'gemini-2.5-flash' 
+      selectedModel: 'gemini-3.5-flash' 
     };
   };
 
